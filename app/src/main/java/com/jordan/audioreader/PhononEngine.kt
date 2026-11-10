@@ -17,7 +17,8 @@ class PhononEngine(private val context: Context) {
     private var ortEnv: OrtEnvironment? = null
     private var ortSession: OrtSession? = null
 
-    private val modelUrl = "https://huggingface.co/gradium-ai/phonon/resolve/main/model.onnx"
+    // URL officielle du modèle Phonon français sur Hugging Face
+    private val modelUrl = "https://huggingface.co/gradium/phonon-40m-fr/resolve/main/model.onnx"
     val modelFile: File get() = File(context.filesDir, "phonon_model.onnx")
 
     var lastErrorMessage: String = ""
@@ -32,11 +33,16 @@ class PhononEngine(private val context: Context) {
             var redirectCount = 0
             var connection: HttpURLConnection
 
-            // Gestion des redirections CDN de Hugging Face (HTTP 301, 302, 307)
             while (true) {
                 val url = URL(currentUrl)
                 connection = url.openConnection() as HttpURLConnection
                 connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
+                
+                // Envoi du jeton d'authentification uniquement vers les serveurs Hugging Face (évite les conflits avec le stockage CDN)
+                if (url.host.contains("huggingface.co")) {
+                    connection.setRequestProperty("Authorization", "Bearer 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")
+                }
+
                 connection.connectTimeout = 15000
                 connection.readTimeout = 30000
                 connection.instanceFollowRedirects = true
@@ -55,7 +61,7 @@ class PhononEngine(private val context: Context) {
                 }
 
                 if (responseCode !in 200..299) {
-                    lastErrorMessage = "Erreur serveur : HTTP $responseCode"
+                    lastErrorMessage = "Erreur serveur : HTTP \$responseCode"
                     return@withContext false
                 }
                 break
@@ -185,21 +191,4 @@ class PhononEngine(private val context: Context) {
             for (chunk in chunks) {
                 for (sample in chunk) {
                     out.write(sample.toInt() and 0xFF)
-                    out.write((sample.toInt() shr 8) and 0xFF)
-                }
-            }
-        }
-    }
-
-    private fun intToByteArray(v: Int) = byteArrayOf(
-        (v and 0xFF).toByte(),
-        ((v shr 8) and 0xFF).toByte(),
-        ((v shr 16) and 0xFF).toByte(),
-        ((v shr 24) and 0xFF).toByte()
-    )
-
-    private fun shortToByteArray(v: Short) = byteArrayOf(
-        (v.toInt() and 0xFF).toByte(),
-        ((v.toInt() shr 8) and 0xFF).toByte()
-    )
-}
+                    out.
