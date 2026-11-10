@@ -1,8 +1,8 @@
-name: Build Android APK
+name: Build Android APK with Native Phonon (ptts)
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
@@ -10,23 +10,48 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Set up JDK 17
-      uses: actions/setup-java@v4
-      with:
-        java-version: '17'
-        distribution: 'temurin'
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
 
-    - name: Setup Gradle
-      uses: gradle/actions/setup-gradle@v3
+      - name: Set up Android NDK & CMake
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r26b
+          add-to-path: true
 
-    - name: Build Debug APK
-      run: gradle assembleDebug --stacktrace
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
 
-    - name: Upload APK Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: PhononReader-APK
-        path: app/build/outputs/apk/debug/app-debug.apk
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Build Gradium ptts native library for Android
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          mkdir -p native_build
+          cd native_build
+          git clone --depth 1 https://github.com/gradium-ai/ptts.git || git clone --depth 1 https://github.com/gradium/ptts.git
+          cd ptts
+          cargo ndk -t arm64-v8a -o ../../app/src/main/jniLibs build --release
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build APK with Gradle
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhononReader-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
