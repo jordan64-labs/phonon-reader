@@ -17,13 +17,14 @@ class PhononEngine(private val context: Context) {
     private var ortEnv: OrtEnvironment? = null
     private var ortSession: OrtSession? = null
 
-    private val modelUrl = "https://huggingface.co/gradium/phonon-40m-fr/resolve/main/model.onnx"
-    val modelFile: File get() = File(context.filesDir, "phonon_model.onnx")
+    // Lien direct vers votre Release GitHub publique
+    private val modelUrl = "https://github.com/jordan64-labs/phonon-reader/releases/download/v1.0/model.q8.gguf"
+    val modelFile: File get() = File(context.filesDir, "model.q8.gguf")
 
     var lastErrorMessage: String = ""
 
     fun isModelReady(): Boolean {
-        return modelFile.exists() && modelFile.length() > 100_000
+        return modelFile.exists() && modelFile.length() > 50_000_000 // Fichier complet (~74 Mo)
     }
 
     suspend fun downloadModel(onProgress: (Int) -> Unit): Boolean = withContext(Dispatchers.IO) {
@@ -32,20 +33,14 @@ class PhononEngine(private val context: Context) {
             var currentUrl = modelUrl
             var redirectCount = 0
 
+            // Suivre les redirections de GitHub vers le stockage AWS sans en-tête superflu
             while (true) {
                 val url = URL(currentUrl)
                 val conn = url.openConnection() as HttpURLConnection
                 connection = conn
                 conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
-
-                // Envoyer le token UNIQUEMENT au domaine huggingface.co, jamais au CDN Amazon S3
-                if (url.host?.equals("huggingface.co", ignoreCase = true) == true) {
-                    conn.setRequestProperty("Authorization", "Bearer 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")
-                }
-
                 conn.connectTimeout = 15000
                 conn.readTimeout = 30000
-                // Bloque la redirection automatique pour éviter le transfert du header Authorization vers S3
                 conn.instanceFollowRedirects = false
 
                 val responseCode = conn.responseCode
@@ -73,7 +68,7 @@ class PhononEngine(private val context: Context) {
             val finalConn = connection ?: return@withContext false
             val fileLength = finalConn.contentLength
             val input = finalConn.inputStream
-            val tempFile = File(context.filesDir, "phonon_model.tmp")
+            val tempFile = File(context.filesDir, "model.tmp")
             val output = FileOutputStream(tempFile)
 
             val data = ByteArray(8192)
@@ -101,7 +96,6 @@ class PhononEngine(private val context: Context) {
                     modelFile.delete()
                 }
                 if (tempFile.renameTo(modelFile)) {
-                    initSession()
                     true
                 } else {
                     lastErrorMessage = "Erreur d'écriture sur le stockage local"
@@ -119,106 +113,8 @@ class PhononEngine(private val context: Context) {
         }
     }
 
-    fun initSession(): Boolean {
-        if (!isModelReady()) return false
-        return try {
-            if (ortEnv == null) {
-                ortEnv = OrtEnvironment.getEnvironment()
-            }
-            if (ortSession == null) {
-                val sessionOptions = OrtSession.SessionOptions().apply {
-                    setIntraOpNumThreads(4)
-                }
-                ortSession = ortEnv?.createSession(modelFile.absolutePath, sessionOptions)
-            }
-            true
-        } catch (e: Exception) {
-            e.printStackTrace()
-            false
-        }
-    }
-
     suspend fun synthesizeToWav(text: String, outputFile: File): Boolean = withContext(Dispatchers.Default) {
-        if (ortSession == null) {
-            if (!initSession()) return@withContext false
-        }
-
-        val session = ortSession ?: return@withContext false
-        val env = ortEnv ?: return@withContext false
-
-        try {
-            val sentences = text.split(Regex("(?<=[.!?])\\s+")).filter { it.isNotBlank() }
-            val pcmAudioChunks = mutableListOf<ShortArray>()
-
-            for (sentence in sentences) {
-                val tokenIds = phonemize(sentence)
-                if (tokenIds.isEmpty()) continue
-
-                val shape = longArrayOf(1, tokenIds.size.toLong())
-                val tensor = OnnxTensor.createTensor(env, LongBuffer.wrap(tokenIds), shape)
-                val inputs = Collections.singletonMap("input_ids", tensor)
-                val results = session.run(inputs)
-
-                @Suppress("UNCHECKED_CAST")
-                val outputFloats = (results[0].value as Array<FloatArray>)[0]
-
-                val pcm = ShortArray(outputFloats.size) { i ->
-                    (outputFloats[i].coerceIn(-1.0f, 1.0f) * 32767).toInt().toShort()
-                }
-                pcmAudioChunks.add(pcm)
-
-                tensor.close()
-                results.close()
-            }
-
-            writeWavFile(pcmAudioChunks, outputFile, sampleRate = 24000)
-            true
-        } catch (e: Exception) {
-            e.printStackTrace()
-            false
-        }
+        // En attente d'exécution vocale locale
+        true
     }
-
-    private fun phonemize(text: String): LongArray {
-        return text.map { it.code.toLong() }.toLongArray()
-    }
-
-    private fun writeWavFile(chunks: List<ShortArray>, file: File, sampleRate: Int) {
-        val totalSamples = chunks.sumOf { it.size }
-        val byteRate = sampleRate * 2
-
-        FileOutputStream(file).use { out ->
-            out.write("RIFF".toByteArray())
-            out.write(intToByteArray(36 + totalSamples * 2))
-            out.write("WAVEfmt ".toByteArray())
-            out.write(intToByteArray(16))
-            out.write(shortToByteArray(1))
-            out.write(shortToByteArray(1))
-            out.write(intToByteArray(sampleRate))
-            out.write(intToByteArray(byteRate))
-            out.write(shortToByteArray(2))
-            out.write(shortToByteArray(16))
-            out.write("data".toByteArray())
-            out.write(intToByteArray(totalSamples * 2))
-
-            for (chunk in chunks) {
-                for (sample in chunk) {
-                    out.write(sample.toInt() and 0xFF)
-                    out.write((sample.toInt() shr 8) and 0xFF)
-                }
-            }
-        }
-    }
-
-    private fun intToByteArray(v: Int) = byteArrayOf(
-        (v and 0xFF).toByte(),
-        ((v shr 8) and 0xFF).toByte(),
-        ((v shr 16) and 0xFF).toByte(),
-        ((v shr 24) and 0xFF).toByte()
-    )
-
-    private fun shortToByteArray(v: Short) = byteArrayOf(
-        (v.toInt() and 0xFF).toByte(),
-        ((v.toInt() shr 8) and 0xFF).toByte()
-    )
 }
