@@ -17,7 +17,6 @@ class PhononEngine(private val context: Context) {
     private var ortEnv: OrtEnvironment? = null
     private var ortSession: OrtSession? = null
 
-    // URL officielle du modèle Phonon français sur Hugging Face
     private val modelUrl = "https://huggingface.co/gradium/phonon-40m-fr/resolve/main/model.onnx"
     val modelFile: File get() = File(context.filesDir, "phonon_model.onnx")
 
@@ -28,31 +27,32 @@ class PhononEngine(private val context: Context) {
     }
 
     suspend fun downloadModel(onProgress: (Int) -> Unit): Boolean = withContext(Dispatchers.IO) {
+        var connection: HttpURLConnection? = null
         try {
             var currentUrl = modelUrl
             var redirectCount = 0
-            var connection: HttpURLConnection
 
             while (true) {
                 val url = URL(currentUrl)
-                connection = url.openConnection() as HttpURLConnection
-                connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
-                
-                // Envoi du jeton d'authentification uniquement vers les serveurs Hugging Face (évite les conflits avec le stockage CDN)
-                if (url.host.contains("huggingface.co")) {
-                    connection.setRequestProperty("Authorization", "Bearer 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")
+                val conn = url.openConnection() as HttpURLConnection
+                connection = conn
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
+
+                // Envoi du jeton sécurisé uniquement vers Hugging Face avec vérification nulle
+                if (url.host?.contains("huggingface.co") == true) {
+                    conn.setRequestProperty("Authorization", "Bearer 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")
                 }
 
-                connection.connectTimeout = 15000
-                connection.readTimeout = 30000
-                connection.instanceFollowRedirects = true
+                conn.connectTimeout = 15000
+                conn.readTimeout = 30000
+                conn.instanceFollowRedirects = true
 
-                val responseCode = connection.responseCode
+                val responseCode = conn.responseCode
                 if (responseCode == HttpURLConnection.HTTP_MOVED_PERM ||
                     responseCode == HttpURLConnection.HTTP_MOVED_TEMP ||
                     responseCode == 307 || responseCode == 308) {
-                    val newUrl = connection.getHeaderField("Location")
-                    connection.disconnect()
+                    val newUrl = conn.getHeaderField("Location")
+                    conn.disconnect()
                     if (newUrl != null && redirectCount < 5) {
                         currentUrl = newUrl
                         redirectCount++
@@ -61,14 +61,16 @@ class PhononEngine(private val context: Context) {
                 }
 
                 if (responseCode !in 200..299) {
-                    lastErrorMessage = "Erreur serveur : HTTP \$responseCode"
+                    lastErrorMessage = "Erreur serveur : HTTP $responseCode"
+                    conn.disconnect()
                     return@withContext false
                 }
                 break
             }
 
-            val fileLength = connection.contentLength
-            val input = connection.inputStream
+            val finalConn = connection ?: return@withContext false
+            val fileLength = finalConn.contentLength
+            val input = finalConn.inputStream
             val tempFile = File(context.filesDir, "phonon_model.tmp")
             val output = FileOutputStream(tempFile)
 
@@ -90,16 +92,25 @@ class PhononEngine(private val context: Context) {
             output.flush()
             output.close()
             input.close()
-            connection.disconnect()
+            finalConn.disconnect()
 
-            if (tempFile.renameTo(modelFile)) {
-                initSession()
-                true
+            if (tempFile.exists()) {
+                if (modelFile.exists()) {
+                    modelFile.delete()
+                }
+                if (tempFile.renameTo(modelFile)) {
+                    initSession()
+                    true
+                } else {
+                    lastErrorMessage = "Erreur d'écriture sur le stockage local"
+                    false
+                }
             } else {
-                lastErrorMessage = "Erreur d'écriture sur le stockage local"
+                lastErrorMessage = "Fichier temporaire introuvable"
                 false
             }
         } catch (e: Exception) {
+            connection?.disconnect()
             e.printStackTrace()
             lastErrorMessage = e.localizedMessage ?: e.toString()
             false
@@ -191,4 +202,21 @@ class PhononEngine(private val context: Context) {
             for (chunk in chunks) {
                 for (sample in chunk) {
                     out.write(sample.toInt() and 0xFF)
-                    out.
+                    out.write((sample.toInt() shr 8) and 0xFF)
+                }
+            }
+        }
+    }
+
+    private fun intToByteArray(v: Int) = byteArrayOf(
+        (v and 0xFF).toByte(),
+        ((v shr 8) and 0xFF).toByte(),
+        ((v shr 16) and 0xFF).toByte(),
+        ((v shr 24) and 0xFF).toByte()
+    )
+
+    private fun shortToByteArray(v: Short) = byteArrayOf(
+        (v.toInt() and 0xFF).toByte(),
+        ((v.toInt() shr 8) and 0xFF).toByte()
+    )
+}
