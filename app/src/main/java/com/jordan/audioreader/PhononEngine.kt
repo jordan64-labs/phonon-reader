@@ -17,8 +17,8 @@ class PhononEngine(private val context: Context) {
     private var ortEnv: OrtEnvironment? = null
     private var ortSession: OrtSession? = null
 
-    // Lien direct vers votre Release GitHub publique
-    private val modelUrl = "https://github.com/jordan64-labs/phonon-reader/releases/download/v1.0/model.q8.gguf"
+    // URL directe vers votre release GitHub publique
+    private val modelUrl = "https://github.com/jordan64-labs/phonon-reader/releases/download/V1.0/model.q8.gguf"
     val modelFile: File get() = File(context.filesDir, "model.q8.gguf")
 
     var lastErrorMessage: String = ""
@@ -33,7 +33,7 @@ class PhononEngine(private val context: Context) {
             var currentUrl = modelUrl
             var redirectCount = 0
 
-            // Suivre les redirections de GitHub vers le stockage AWS sans en-tête superflu
+            // Suivre les redirections de GitHub vers le CDN AWS sans injecter de header bloquant
             while (true) {
                 val url = URL(currentUrl)
                 val conn = url.openConnection() as HttpURLConnection
