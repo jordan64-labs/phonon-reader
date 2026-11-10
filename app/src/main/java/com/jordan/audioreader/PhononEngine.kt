@@ -17,9 +17,10 @@ class PhononEngine(private val context: Context) {
     private var ortEnv: OrtEnvironment? = null
     private var ortSession: OrtSession? = null
 
-    // URL officielle du modèle Phonon optimisé au format ONNX
     private val modelUrl = "https://huggingface.co/gradium-ai/phonon/resolve/main/model.onnx"
     val modelFile: File get() = File(context.filesDir, "phonon_model.onnx")
+
+    var lastErrorMessage: String = ""
 
     fun isModelReady(): Boolean {
         return modelFile.exists() && modelFile.length() > 100_000
@@ -27,11 +28,38 @@ class PhononEngine(private val context: Context) {
 
     suspend fun downloadModel(onProgress: (Int) -> Unit): Boolean = withContext(Dispatchers.IO) {
         try {
-            val url = URL(modelUrl)
-            val connection = url.openConnection() as HttpURLConnection
-            connection.connectTimeout = 15000
-            connection.readTimeout = 30000
-            connection.connect()
+            var currentUrl = modelUrl
+            var redirectCount = 0
+            var connection: HttpURLConnection
+
+            // Gestion des redirections CDN de Hugging Face (HTTP 301, 302, 307)
+            while (true) {
+                val url = URL(currentUrl)
+                connection = url.openConnection() as HttpURLConnection
+                connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
+                connection.connectTimeout = 15000
+                connection.readTimeout = 30000
+                connection.instanceFollowRedirects = true
+
+                val responseCode = connection.responseCode
+                if (responseCode == HttpURLConnection.HTTP_MOVED_PERM ||
+                    responseCode == HttpURLConnection.HTTP_MOVED_TEMP ||
+                    responseCode == 307 || responseCode == 308) {
+                    val newUrl = connection.getHeaderField("Location")
+                    connection.disconnect()
+                    if (newUrl != null && redirectCount < 5) {
+                        currentUrl = newUrl
+                        redirectCount++
+                        continue
+                    }
+                }
+
+                if (responseCode !in 200..299) {
+                    lastErrorMessage = "Erreur serveur : HTTP $responseCode"
+                    return@withContext false
+                }
+                break
+            }
 
             val fileLength = connection.contentLength
             val input = connection.inputStream
@@ -56,15 +84,18 @@ class PhononEngine(private val context: Context) {
             output.flush()
             output.close()
             input.close()
+            connection.disconnect()
 
             if (tempFile.renameTo(modelFile)) {
                 initSession()
                 true
             } else {
+                lastErrorMessage = "Erreur d'écriture sur le stockage local"
                 false
             }
         } catch (e: Exception) {
             e.printStackTrace()
+            lastErrorMessage = e.localizedMessage ?: e.toString()
             false
         }
     }
