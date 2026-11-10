@@ -38,18 +38,20 @@ class PhononEngine(private val context: Context) {
                 connection = conn
                 conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
 
-                // Envoi du jeton sécurisé uniquement vers Hugging Face avec vérification nulle
-                if (url.host?.contains("huggingface.co") == true) {
+                // Envoyer le token UNIQUEMENT au domaine huggingface.co, jamais au CDN Amazon S3
+                if (url.host?.equals("huggingface.co", ignoreCase = true) == true) {
                     conn.setRequestProperty("Authorization", "Bearer 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")
                 }
 
                 conn.connectTimeout = 15000
                 conn.readTimeout = 30000
-                conn.instanceFollowRedirects = true
+                // Bloque la redirection automatique pour éviter le transfert du header Authorization vers S3
+                conn.instanceFollowRedirects = false
 
                 val responseCode = conn.responseCode
                 if (responseCode == HttpURLConnection.HTTP_MOVED_PERM ||
                     responseCode == HttpURLConnection.HTTP_MOVED_TEMP ||
+                    responseCode == HttpURLConnection.HTTP_SEE_OTHER ||
                     responseCode == 307 || responseCode == 308) {
                     val newUrl = conn.getHeaderField("Location")
                     conn.disconnect()
