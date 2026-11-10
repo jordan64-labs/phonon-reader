@@ -72,7 +72,7 @@ class MainActivity : ComponentActivity() {
                 exoPlayer.play()
                 updateStatus("▶️ En lecture : ${article.title}", false)
             } else {
-                updateStatus("❌ Erreur lors de la synthèse Phonon.", false)
+                updateStatus("❌ Erreur lors de la synthèse : ${phononEngine.lastErrorMessage}", false)
             }
         }
     }
@@ -126,7 +126,7 @@ fun AppScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // Si le modèle n'est pas encore téléchargé
+            // Écran de téléchargement initial si le modèle est absent
             if (!isModelReady) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -170,7 +170,7 @@ fun AppScreen(
                                             isModelReady = true
                                             statusText = "Modèle prêt ! Collez une URL pour commencer."
                                         } else {
-                                            statusText = "❌ Échec du téléchargement du modèle."
+                                            statusText = "❌ Échec : ${phononEngine.lastErrorMessage}"
                                         }
                                     }
                                 },
@@ -183,7 +183,7 @@ fun AppScreen(
                     }
                 }
             } else {
-                // Écran de conversion normal
+                // Écran principal une fois le modèle téléchargé
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
